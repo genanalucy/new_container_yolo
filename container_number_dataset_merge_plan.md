@@ -99,10 +99,11 @@ test/labels: 0
 path: /home/hzh/container_yolo/container_v1i_yolov11_b
 train: train/images
 val: valid/images
-test: valid/images
 nc: 1
 names: ['container_number_region']
 ```
+
+注意：B 当前没有独立 test 集，不应把 `valid/images` 当成正式 test。`valid/images` 只能用于训练过程验证和人工抽查；最终业务评估需要另建独立测试集或负例挑战集。
 
 样例标签：
 
@@ -157,8 +158,7 @@ C 数据集是老的 ChainerCV / SSD 项目，目标是检测集装箱、车辆�
 
 可用方式：
 
-- 作为背景负样本加入。
-- 对应 YOLO 标签文件设为空文件。
+- 只有人工筛选确认没有清晰集装箱编号的图片，才可作为空标签负样本加入。
 - 用于减少模型对非集装箱编号、车辆、建筑、港口背景等区域的误检。
 
 ## 3. 三个数据集的共性与差异
@@ -236,37 +236,50 @@ b_val_原文件名.jpg
 
 对应标签文件同名改写。
 
-### 5.2 A 数据集转换后合并
+### 5.2 A 数据集试转、审核后合并
 
-规则：
+A 不能直接全量合并，也不能先全量合成最小外接框后再抽查。正确顺序是先做小规模试转和可视化审核，再决定是否使用简单外接框或空间聚类。
 
-对 A 中每张图片：
+试转流程：
 
-1. 读取该图片对应的 YOLO label。
-2. 将每个框从 `x_center y_center width height` 转为 `x1 y1 x2 y2`。
-3. 计算所有框的最小外接矩形：
+1. 从 A 的 `train` 和 `valid` 中随机抽取约 100 张有标签图片。
+2. 读取每张图片对应的 YOLO label。
+3. 将每个框从 `x_center y_center width height` 转为 `x1 y1 x2 y2`。
+4. 先按“同一编号区域”假设计算最小外接矩形：
    - `x1_min = min(all_x1)`
    - `y1_min = min(all_y1)`
    - `x2_max = max(all_x2)`
    - `y2_max = max(all_y2)`
-4. 将外接矩形转回 YOLO 格式。
-5. 类别统一写成 `0`。
-6. 输出一个标签文件，通常每张图一行：
+5. 将外接矩形转回 YOLO 格式。
+6. 类别统一写成 `0`。
+7. 输出试转可视化图片，人工检查合成框是否覆盖完整集装箱编号区域。
+
+试转输出标签示例：
 
 ```text
 0 x_center y_center width height
 ```
 
+判定规则：
+
+- 如果 100 张试转样本中，大部分图片都只有一个紧凑编号区域，且外接框没有明显包含大面积无关背景，可以使用简单最小外接框转换。
+- 如果多簇编号区域比例超过 5%，或者外接框明显过大，应改为按空间聚类生成多个编号区域框。
+- 如果某些图片的原始小框不是集装箱编号区域，应剔除这些图片，不加入正样本。
+
+空间聚类规则建议：
+
+1. 将同一图片内的原始小框按中心点坐标排序。
+2. 根据横向和纵向间距把相邻小框聚为同一组。
+3. 每组分别计算最小外接矩形。
+4. 每组输出一个类别为 `0` 的编号区域框。
+5. 聚类结果必须再次可视化抽查。
+
 加入策略：
 
+- 只有通过试转审核的 A 样本才加入合并集。
 - A 的 `train` 转换后加入合并集 `train`。
 - A 的 `valid` 转换后加入合并集 `val`。
-
-质量控制：
-
-- 转换后必须抽查可视化 50 到 100 张。
-- 如果发现某些图片外接框不是完整集装箱编号区域，应剔除或单独修正。
-- 如果一张图中存在多个独立编号区域，简单外接框可能会过大，需要改成按空间聚类分成多个编号区域框。
+- 如果 A 转换质量不稳定，首版只使用审核通过的部分，不强行全量加入。
 
 命名前缀建议：
 
@@ -275,25 +288,36 @@ a_train_原文件名.jpg
 a_val_原文件名.jpg
 ```
 
-### 5.3 C 数据集作为负样本合并
+### 5.3 C 数据集筛选后作为负样本
 
 规则：
 
 - 不使用 C 的原始检测标签作为正样本。
-- 从 C 中选择背景或非编号图片加入训练集。
-- 为每张加入的图片创建同名空 `.txt` 标签文件。
+- C 的 `train` 和 `validation` 主要是集装箱、车辆、船等物体检测标注，不是干净的编号区域负样本。
+- C 的 `negative` 也不能默认视为干净负样本，因为其中可能存在清晰集装箱编号或伪标注。
+- 首版默认不加入 C；只有人工筛选确认“没有清晰集装箱编号区域”的图片，才可以作为空标签负样本加入。
+- 如果图片中有清晰集装箱编号，但没有编号区域框，不能作为空标签负样本；要么剔除，要么手工补标后作为正样本。
 
-建议加入数量：
+筛选标准：
 
-```text
-negative: 全部 24 张
-train/validation: 抽取 100 到 200 张
-```
+可以作为负样本：
 
-加入位置：
+- 没有集装箱编号的港口、道路、车辆、设备、建筑背景。
+- 有车牌、车辆编号、设备编号、建筑编号，但没有清晰集装箱编号。
+- 有集装箱但箱号不可见、严重模糊、过小到无法作为有效目标。
 
+不能作为空标签负样本：
+
+- 有清晰集装箱箱号但没有编号区域标注。
+- 箱号被部分遮挡但仍可定位编号区域。
+- 一张图中既有非目标编号，也有清晰集装箱编号。
+
+加入方式：
+
+- 为每张通过筛选的图片创建同名空 `.txt` 标签文件。
 - 主要加入 `images/train` 和 `labels/train`。
 - 少量加入 `images/val`，用于观察负样本误检。
+- 如果人工筛选成本太高，第一版合并训练禁用 C，只训练 B+A。
 
 命名前缀建议：
 
@@ -303,27 +327,41 @@ c_train_bg_原文件名.jpg
 c_val_bg_原文件名.jpg
 ```
 
+建议加入数量：
+
+```text
+第一版: 0 张或仅加入人工确认干净的少量负样本
+后续版: 根据误检类型逐步补充 100 到 200 张负样本
+```
+
 注意：
 
-C 中如果存在清晰集装箱编号但没有编号区域标注，把它当空标签会造成训练噪声。加入前应抽查，优先选择没有清晰编号的背景图。
+C 的价值是降低对非集装箱编号的误检，不是增加正样本。宁可少加，也不能把带清晰箱号的图片当空标签加入，否则会教模型不要检测真正目标。
 
 ## 6. 第一版合并比例
 
-推荐第一版：
+推荐按阶段合并，不直接一次性上 A+B+C：
+
+```text
+阶段 1: B-only，建立干净基线
+阶段 2: B + 审核通过的 A，判断 A 是否提升召回或泛化
+阶段 3: B + 审核通过的 A + 筛选后的 C 负样本，判断负样本是否降低非目标编号误检
+```
+
+第一版建议：
 
 ```text
 B: 全部加入
-A: 转换后全部加入，但先抽查质量
-C: 加入 100 到 200 张负样本
+A: 先 100 张试转可视化，通过后再批量转换；质量不稳定时只加入审核通过部分
+C: 默认不加入；只有人工确认无清晰箱号后，才作为空标签负样本加入
 ```
 
-如果 A 转换效果不稳定，则改成：
+比例控制原则：
 
-```text
-B: 全部加入
-A: 转换后只加入抽查通过的部分
-C: 加入 100 到 200 张负样本
-```
+- 不只按图片数量决定比例，要统计正样本实例数、负样本数量和来源域分布。
+- C 负样本不宜一次加入过多，避免空标签噪声压制真正目标。
+- 如果 B+A 的召回下降，优先回查 A 的转换质量。
+- 如果 B+A+C 的召回下降，优先回查 C 是否含有未标注的清晰集装箱编号。
 
 ## 7. 训练计划
 
@@ -352,7 +390,9 @@ model.train(
 )
 ```
 
-### 7.2 训练合并数据集
+### 7.2 训练 B+A 模型
+
+目的：单独验证 A 转换数据是否带来收益，避免把 A 和 C 的影响混在一起。
 
 训练脚本：
 
@@ -362,22 +402,51 @@ from ultralytics import YOLO
 model = YOLO("yolo11m.pt")
 
 model.train(
-    data="/home/hzh/container_yolo/merged_container_number_yolo/data.yaml",
+    data="/home/hzh/container_yolo/merged_container_number_yolo_ba/data.yaml",
     epochs=100,
     imgsz=640,
     batch=64,
     device="0,1,2,3",
     workers=16,
     project="/home/hzh/container_yolo/runs",
-    name="region_merged_yolo11m_100e",
+    name="region_ba_yolo11m_100e",
     exist_ok=True,
     patience=30,
 )
 ```
 
-### 7.3 对比指标
+### 7.3 训练 B+A+C 模型
 
-对比 B-only 与 merged 模型：
+前提：C 中已有人工筛选通过的干净负样本。如果 C 未完成筛选，则跳过本阶段，不要强行加入空标签。
+
+训练脚本：
+
+```python
+from ultralytics import YOLO
+
+model = YOLO("yolo11m.pt")
+
+model.train(
+    data="/home/hzh/container_yolo/merged_container_number_yolo_bac/data.yaml",
+    epochs=100,
+    imgsz=640,
+    batch=64,
+    device="0,1,2,3",
+    workers=16,
+    project="/home/hzh/container_yolo/runs",
+    name="region_bac_yolo11m_100e",
+    exist_ok=True,
+    patience=30,
+)
+```
+
+### 7.4 对比指标
+
+按阶段对比三个模型：
+
+```text
+B-only -> B+A -> B+A+C
+```
 
 - Precision
 - Recall
@@ -386,6 +455,7 @@ model.train(
 - 误检数量
 - 漏检数量
 - 非集装箱编号误检情况
+- 负例挑战集上的误检数量
 
 重点不是只看 mAP，还要看业务目标：
 
@@ -395,33 +465,68 @@ model.train(
 
 ## 8. 验证计划
 
-训练完成后检查：
+训练完成后分别检查三个阶段模型的训练输出：
 
 ```text
-runs/region_merged_yolo11m_100e/results.png
-runs/region_merged_yolo11m_100e/val_batch*_pred.jpg
-runs/region_merged_yolo11m_100e/confusion_matrix.png
+runs/region_b_yolo11m_100e/results.png
+runs/region_b_yolo11m_100e/val_batch*_pred.jpg
+runs/region_b_yolo11m_100e/confusion_matrix.png
+
+runs/region_ba_yolo11m_100e/results.png
+runs/region_ba_yolo11m_100e/val_batch*_pred.jpg
+runs/region_ba_yolo11m_100e/confusion_matrix.png
+
+runs/region_bac_yolo11m_100e/results.png
+runs/region_bac_yolo11m_100e/val_batch*_pred.jpg
+runs/region_bac_yolo11m_100e/confusion_matrix.png
 ```
+
+注意：
+
+- B 当前没有独立 test，`valid/images` 不能当作最终测试集。
+- `valid/images` 可以用于训练过程验证和人工可视化抽查。
+- 最终业务验证应额外建立独立负例挑战集。
+
+负例挑战集建议：
+
+```text
+/home/hzh/container_yolo/container_number_negative_challenge/images
+/home/hzh/container_yolo/container_number_negative_challenge/labels
+```
+
+负例挑战集应包含：
+
+- 车牌编号。
+- 车辆车身编号。
+- 港口设备编号。
+- 建筑编号。
+- 路牌编号。
+- 非集装箱文字和数字。
+- 有集装箱但箱号不可见或不可读的图片。
+
+负例挑战集标签应为空 `.txt` 文件，用于专门统计非目标编号误检。
 
 推理验证建议：
 
 ```python
 from ultralytics import YOLO
 
-model = YOLO("/home/hzh/container_yolo/runs/region_merged_yolo11m_100e/weights/best.pt")
+model = YOLO("/home/hzh/container_yolo/runs/region_bac_yolo11m_100e/weights/best.pt")
 
 model.predict(
-    source="/home/hzh/container_yolo/merged_container_number_yolo/images/val",
+    source="/home/hzh/container_yolo/container_number_negative_challenge/images",
     imgsz=640,
     conf=0.25,
     device=0,
     save=True,
     save_crop=True,
     project="/home/hzh/container_yolo/runs",
-    name="region_merged_predict_crops",
+    name="region_negative_challenge_predict",
     exist_ok=True,
 )
 ```
+
+如果没有训练 B+A+C，则用 B+A 的 `best.pt` 做同样验证。
 
 人工重点检查：
 
@@ -439,9 +544,11 @@ model.predict(
 建议流程：
 
 1. 先完成 B-only 基线。
-2. 再完成 A+B+C 合并训练。
-3. 比较两个模型。
-4. 根据误检和漏检决定是否补数据。
+2. 再完成 B+A 训练，单独判断 A 转换数据是否有效。
+3. 人工筛选 C 或另建负例挑战集。
+4. 如果 C 有干净负样本，再完成 B+A+C 训练。
+5. 比较三个阶段模型。
+6. 根据误检和漏检决定是否补数据。
 
 如果需要补充，优先补：
 
@@ -467,8 +574,10 @@ A 的多个小框如果属于同一个编号区域，外接框转换合理。
 
 应对方式：
 
-- 先抽查。
-- 必要时按空间距离聚类后生成多个区域框。
+- 先做 100 张试转可视化，不先全量合并。
+- 统计多簇编号区域比例和明显过大框比例。
+- 如果多簇率超过 5%，或外接框明显包含多个独立编号区域，必须先按空间距离聚类后生成多个区域框。
+- 只把审核通过的 A 样本加入合并集。
 
 ### 10.2 C 数据集负样本风险
 
@@ -478,8 +587,10 @@ C 中可能包含清晰集装箱编号，但没有编号区域标注。
 
 应对方式：
 
-- 只选没有清晰编号的图片作为负样本。
-- 或者手工补标后再作为正样本。
+- 首版默认禁用 C，除非完成逐张人工筛选。
+- 只选没有清晰集装箱编号的图片作为空标签负样本。
+- 有清晰集装箱编号的图片不能空标；要么剔除，要么手工补标后再作为正样本。
+- 如果加入 C 后召回下降，优先检查 C 是否包含未标注箱号。
 
 ### 10.3 课程合并要求与任务正确性的冲突
 
@@ -488,22 +599,27 @@ C 中可能包含清晰集装箱编号，但没有编号区域标注。
 应对方式：
 
 - 不是简单拼接，而是统一标注语义后合并。
-- A 转换为区域框。
-- B 直接加入。
-- C 作为负样本加入。
+- B 直接加入，作为主正样本和基线。
+- A 先试转和审核，通过后转换为编号区域框。
+- C 不默认加入，只有筛选为干净负样本后才加入。
+- 用 B-only、B+A、B+A+C 分阶段实验满足课程合并要求，同时保留问题定位能力。
 
 ## 11. 建议执行顺序
 
-1. 可视化抽查 A 的转换可行性。
-2. 编写合并脚本。
-3. 生成 `merged_container_number_yolo`。
-4. 随机抽查合并后的标签可视化。
-5. 训练 B-only 正式模型。
-6. 训练 merged 正式模型。
-7. 对比两个模型指标和误检类型。
-8. 决定是否补充负样本或特殊场景数据。
-9. 用最佳检测模型裁剪编号区域。
-10. 接 OCR 模块识别编号文本。
+1. 从 A 中抽取约 100 张做试转和可视化审核。
+2. 根据 A 试转结果决定使用简单外接框还是空间聚类。
+3. 生成 B-only 数据配置，保留干净基线。
+4. 生成 B+A 合并数据集。
+5. 随机抽查 B+A 标签可视化。
+6. 训练 B-only 正式模型。
+7. 训练 B+A 正式模型。
+8. 建立独立负例挑战集，专测非集装箱编号误检。
+9. 人工筛选 C 中没有清晰箱号的图片；如果筛选成本过高，首版跳过 C。
+10. 如果 C 筛选合格，生成 B+A+C 数据集并训练正式模型。
+11. 对比 B-only、B+A、B+A+C 的指标和误检类型。
+12. 根据误检和漏检决定是否补充负样本或特殊场景数据。
+13. 用最佳检测模型裁剪编号区域。
+14. 接 OCR 模块识别编号文本。
 
 ## 12. 给审核 agent 的核心问题
 

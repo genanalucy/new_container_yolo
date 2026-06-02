@@ -1,3 +1,13 @@
 *
-!container_number_dataset_merge_plan.md
 !.gitignore
+!README.md
+!requirements.txt
+!container_number_dataset_merge_plan.md
+!public_container_number_dataset_improvement_plan.md
+!models/
+!models/best_bonly_1280.pt
+!scripts/
+!scripts/*.py
+!docs/
+!docs/training_results/
+!docs/training_results/*.csv
