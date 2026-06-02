@@ -38,6 +38,8 @@ source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 ```
 
+训练脚本会在启动时检查 `ultralytics`，如果当前 Python 环境缺少依赖，会提示先运行上面的安装命令。
+
 如果在 Mac 上只做 CPU 推理，也可以直接安装：
 
 ```bash
@@ -191,39 +193,29 @@ names: ['container_number_region']
 scripts/train_bonly_1280.py
 ```
 
-完整训练代码：
+脚本默认读取仓库内路径：
 
-```python
-from ultralytics import YOLO
-
-model = YOLO("/home/hzh/container_yolo/yolo11m.pt")
-
-model.train(
-    data="/home/hzh/container_yolo/container_v1i_yolov11_b/data_fixed.yaml",
-    epochs=100,
-    imgsz=1280,
-    batch=16,
-    device="0,1,2,3",
-    workers=16,
-    project="/home/hzh/container_yolo/runs",
-    name="region_b_yolo11m_1280_100e",
-    exist_ok=True,
-    patience=30,
-)
+```text
+datasets/container_v1i_yolov11_b/data_fixed.yaml
+runs/
 ```
+
+也可以通过命令行参数覆盖数据、权重、输出目录和训练设备。
 
 关键参数说明：
 
-| 参数 | 值 | 说明 |
+| 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `model` | `yolo11m.pt` | 使用 YOLO11m 预训练权重初始化 |
-| `data` | `container_v1i_yolov11_b/data_fixed.yaml` | B 数据集配置文件 |
-| `epochs` | `100` | 最多训练 100 轮 |
-| `imgsz` | `1280` | 高分辨率训练，用于小目标场景 |
-| `batch` | `16` | 适配 4 张 3090 的显存压力 |
-| `device` | `0,1,2,3` | 使用 4 张 GPU 训练 |
-| `workers` | `16` | 数据加载线程数 |
-| `patience` | `30` | 30 轮无提升则 early stopping |
+| `--model` | `yolo11m.pt` | YOLO 预训练权重路径或模型名 |
+| `--data` | `datasets/container_v1i_yolov11_b/data_fixed.yaml` | B 数据集配置文件 |
+| `--project` | `runs` | 训练输出目录 |
+| `--name` | `region_b_yolo11m_1280_100e` | 实验名称 |
+| `--epochs` | `100` | 最多训练 100 轮 |
+| `--imgsz` | `1280` | 高分辨率训练，用于小目标场景 |
+| `--batch` | `16` | batch size |
+| `--device` | `0` | 训练设备，例如 `0` 或 `0,1,2,3` |
+| `--workers` | `8` | 数据加载线程数 |
+| `--patience` | `30` | 30 轮无提升则 early stopping |
 
 单机直接启动：
 
@@ -235,7 +227,7 @@ python3 scripts/train_bonly_1280.py
 
 ```bash
 tmux new-session -d -s container_bonly_1280 \
-  'cd /home/hzh/container_yolo && python3 train_bonly_1280.py 2>&1 | tee /home/hzh/container_yolo/runs/region_b_yolo11m_1280_100e_train.log'
+  'cd /home/hzh/container_yolo && python3 scripts/train_bonly_1280.py --data /home/hzh/container_yolo/container_v1i_yolov11_b/data_fixed.yaml --project /home/hzh/container_yolo/runs --device 0,1,2,3 --workers 16 2>&1 | tee /home/hzh/container_yolo/runs/region_b_yolo11m_1280_100e_train.log'
 ```
 
 训练过程监控：
@@ -296,7 +288,7 @@ RF_ROOT = ROOT / "public_datasets" / "roboflow_container_number_detection_v2_yol
 B_ROOT = ROOT / "container_v1i_yolov11_b"
 MERGED_ROOT = ROOT / "merged_container_number_yolo_b_rf"
 AUDIT_ROOT = ROOT / "public_datasets" / "roboflow_container_number_detection_v2_yolov8_audit"
-TRAIN_SCRIPT = ROOT / "train_b_rf_960.py"
+TRAIN_SCRIPT = ROOT / "scripts" / "train_b_rf_960.py"
 ```
 
 审核逻辑会先等待 Roboflow 下载完成：
@@ -482,37 +474,29 @@ python3 scripts/auto_audit_merge_train_rf.py
 scripts/train_b_rf_960.py
 ```
 
-完整训练代码：
+脚本默认读取仓库内路径：
 
-```python
-from ultralytics import YOLO
-
-model = YOLO('/home/hzh/container_yolo/yolo11m.pt')
-
-model.train(
-    data='/home/hzh/container_yolo/merged_container_number_yolo_b_rf/data.yaml',
-    epochs=100,
-    imgsz=960,
-    batch=32,
-    device='0,1,2,3',
-    workers=16,
-    project='/home/hzh/container_yolo/runs',
-    name='region_b_rf_yolo11m_960_100e',
-    exist_ok=True,
-    patience=30,
-)
+```text
+datasets/merged_container_number_yolo_b_rf/data.yaml
+runs/
 ```
+
+也可以通过命令行参数覆盖数据、权重、输出目录和训练设备。
 
 关键参数说明：
 
-| 参数 | 值 | 说明 |
+| 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `data` | `merged_container_number_yolo_b_rf/data.yaml` | B + Roboflow 合并数据集 |
-| `epochs` | `100` | 最多训练 100 轮 |
-| `imgsz` | `960` | 兼顾速度、显存和小目标表现 |
-| `batch` | `32` | 960 输入尺寸下提高 batch |
-| `device` | `0,1,2,3` | 使用 4 张 GPU |
-| `patience` | `30` | 验证指标长期无提升则提前停止 |
+| `--model` | `yolo11m.pt` | YOLO 预训练权重路径或模型名 |
+| `--data` | `datasets/merged_container_number_yolo_b_rf/data.yaml` | B + Roboflow 合并数据集 |
+| `--project` | `runs` | 训练输出目录 |
+| `--name` | `region_b_rf_yolo11m_960_100e` | 实验名称 |
+| `--epochs` | `100` | 最多训练 100 轮 |
+| `--imgsz` | `960` | 兼顾速度、显存和小目标表现 |
+| `--batch` | `32` | 960 输入尺寸下提高 batch |
+| `--device` | `0` | 训练设备，例如 `0` 或 `0,1,2,3` |
+| `--workers` | `8` | 数据加载线程数 |
+| `--patience` | `30` | 验证指标长期无提升则提前停止 |
 
 单机直接启动：
 
@@ -524,7 +508,7 @@ python3 scripts/train_b_rf_960.py
 
 ```bash
 tmux new-session -d -s container_b_rf_960 \
-  'cd /home/hzh/container_yolo && python3 train_b_rf_960.py 2>&1 | tee /home/hzh/container_yolo/runs/region_b_rf_yolo11m_960_100e_train.log'
+  'cd /home/hzh/container_yolo && python3 scripts/train_b_rf_960.py --data /home/hzh/container_yolo/merged_container_number_yolo_b_rf/data.yaml --project /home/hzh/container_yolo/runs --device 0,1,2,3 --workers 16 2>&1 | tee /home/hzh/container_yolo/runs/region_b_rf_yolo11m_960_100e_train.log'
 ```
 
 训练过程监控：
@@ -757,17 +741,16 @@ names: ['container_number_region']
 
 ### 步骤 5：复现 B-only-1280 训练
 
-修改 `scripts/train_bonly_1280.py` 中的数据路径：
+本地默认数据路径为 `datasets/container_v1i_yolov11_b/data_fixed.yaml`。如果数据放在其它位置，启动时传入 `--data`：
 
-```python
-data='/absolute/path/to/your/data.yaml'
+```bash
+python3 scripts/train_bonly_1280.py --data /absolute/path/to/your/data.yaml
 ```
 
-如果只有一张 GPU，修改：
+如果只有一张 GPU，传入：
 
-```python
-device='0'
-batch=4 或 batch=8
+```bash
+python3 scripts/train_bonly_1280.py --data /absolute/path/to/your/data.yaml --device 0 --batch 4
 ```
 
 启动训练：
@@ -790,7 +773,7 @@ python3 scripts/auto_audit_merge_train_rf.py
 5. 审核通过后运行：
 
 ```bash
-python3 scripts/train_b_rf_960.py
+python3 scripts/train_b_rf_960.py --data /absolute/path/to/merged_container_number_yolo_b_rf/data.yaml
 ```
 
 ### 步骤 7：验证模型
